@@ -1,7 +1,7 @@
-<h1 align="center">llmctl</h1>
+<h1 align="center">os-llm ctl</h1>
 
 <p align="center">
-    An inference platform for serving LLMs efficiently and observably.
+    An inference platform for serving and observing LLMs.
 </p>
 
 <p align="center">
@@ -40,5 +40,9 @@
 ## Usage
 ## Benchmarks
 ## Roadmap
+
 ## Learnings
+
+- Built to understand how production serving systems operates a distributed inference platform
+
 
