@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -51,6 +52,11 @@ type ModelDeploymentSpec struct {
 	// Resources for the model server container (CPU, memory, GPUs).
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// ShmSize mounts a memory-backed /dev/shm of this size. vLLM needs more
+	// than the 64Mi container default for its engine's shared-memory queues.
+	// +optional
+	ShmSize *resource.Quantity `json:"shmSize,omitempty"`
 }
 
 // ModelDeploymentStatus is what the controller observed.

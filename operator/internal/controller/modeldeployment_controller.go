@@ -80,6 +80,7 @@ func (r *ModelDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		dep.Spec.Replicas = md.Spec.Replicas
 		dep.Spec.Template.Labels = objLabels
 		dep.Spec.Template.Spec.Containers = []corev1.Container{serverContainer(&md)}
+		dep.Spec.Template.Spec.Volumes = shmVolumes(&md)
 		return controllerutil.SetControllerReference(&md, dep, r.Scheme)
 	})
 	if err != nil {
@@ -96,7 +97,7 @@ func (r *ModelDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 // otherwise default are set explicitly, so every reconcile compares equal and
 // no-op updates are skipped.
 func serverContainer(md *servingv1alpha1.ModelDeployment) corev1.Container {
-	return corev1.Container{
+	c := corev1.Container{
 		Name:            "server",
 		Image:           md.Spec.Image,
 		ImagePullPolicy: corev1.PullIfNotPresent,
@@ -122,6 +123,25 @@ func serverContainer(md *servingv1alpha1.ModelDeployment) corev1.Container {
 		TerminationMessagePath:   corev1.TerminationMessagePathDefault,
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 	}
+	if md.Spec.ShmSize != nil {
+		c.VolumeMounts = []corev1.VolumeMount{{Name: "dshm", MountPath: "/dev/shm"}}
+	}
+	return c
+}
+
+// shmVolumes returns a memory-backed /dev/shm volume when ShmSize is set.
+// It counts toward the pod's memory limit.
+func shmVolumes(md *servingv1alpha1.ModelDeployment) []corev1.Volume {
+	if md.Spec.ShmSize == nil {
+		return nil
+	}
+	return []corev1.Volume{{
+		Name: "dshm",
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{
+			Medium:    corev1.StorageMediumMemory,
+			SizeLimit: md.Spec.ShmSize,
+		}},
+	}}
 }
 
 func (r *ModelDeploymentReconciler) updateStatus(ctx context.Context, md *servingv1alpha1.ModelDeployment,
