@@ -1,7 +1,18 @@
 CLUSTER ?= os-llm
 TAG     ?= dev
 
-.PHONY: test images kind-up kind-down load monitoring observability operator deploy up forward grafana jaeger
+.PHONY: proto cli test images kind-up kind-down load monitoring observability operator deploy up forward grafana jaeger
+
+# Regenerates Go code from proto/. Needs protoc, protoc-gen-go and protoc-gen-go-grpc.
+proto:
+	mkdir -p gen
+	protoc -I proto \
+		--go_out=gen --go_opt=paths=source_relative \
+		--go-grpc_out=gen --go-grpc_opt=paths=source_relative \
+		proto/osllm/v1/admin.proto
+
+cli:
+	go build -o bin/osllm ./cmd/osllm
 
 test:
 	go vet ./... && go test -race ./...
@@ -48,7 +59,7 @@ deploy: load
 up: kind-up monitoring observability operator deploy
 
 forward:
-	kubectl -n os-llm port-forward svc/gateway 8080:8080
+	kubectl -n os-llm port-forward svc/gateway 8080:8080 9090:9090
 
 grafana:
 	kubectl -n monitoring port-forward svc/kube-prom-grafana 3000:80

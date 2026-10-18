@@ -31,7 +31,7 @@ spec:
         app.kubernetes.io/part-of: os-llm
       annotations:
         # Bump to roll the pod after editing the ConfigMap.
-        os-llm/config-rev: "3"
+        os-llm/config-rev: "4"
     spec:
       serviceAccountName: gateway
       terminationGracePeriodSeconds: 45 # longer than the gateway's 30s drain
@@ -48,6 +48,8 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+            - name: grpc
+              containerPort: 9090
           volumeMounts:
             - name: config
               mountPath: /etc/os-llm
@@ -86,3 +88,6 @@ spec:
     - name: http
       port: 8080
       targetPort: http
+    - name: grpc
+      port: 9090
+      targetPort: grpc

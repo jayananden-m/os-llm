@@ -101,7 +101,7 @@ func serverContainer(md *servingv1alpha1.ModelDeployment) corev1.Container {
 		Image:           md.Spec.Image,
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Args:            md.Spec.Args,
-		Env:             []corev1.EnvVar{{Name: "OSLLM_MODEL", Value: md.Spec.Model}},
+		Env:             append([]corev1.EnvVar{{Name: "OSLLM_MODEL", Value: md.Spec.Model}}, md.Spec.Env...),
 		Ports: []corev1.ContainerPort{{
 			Name:          "http",
 			ContainerPort: md.Spec.Port,

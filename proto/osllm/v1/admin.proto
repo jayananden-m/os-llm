@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package osllm.v1;
+
+option go_package = "github.com/jayananden-m/os-llm/gen/osllm/v1;osllmv1";
+
+// Admin exposes the gateway's live routing state to operators and tooling.
+service Admin {
+  // GetStatus returns queue and replica load for one model, or all models.
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+}
+
+message GetStatusRequest {
+  // Model to report on. Empty means every served model.
+  string model = 1;
+}
+
+message ReplicaStatus {
+  string address = 1;
+  int32 in_flight = 2;
+}
+
+message ModelStatus {
+  string model = 1;
+  int32 capacity = 2; // total concurrent slots across replicas
+  int32 queued = 3;   // requests waiting for a slot
+  repeated ReplicaStatus replicas = 4;
+}
+
+message GetStatusResponse {
+  repeated ModelStatus models = 1;
+}

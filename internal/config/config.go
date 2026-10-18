@@ -49,6 +49,7 @@ type ModelDeploymentsSource struct {
 
 type Config struct {
 	Listen       string   `json:"listen"`
+	AdminListen  string   `json:"adminListen"` // gRPC admin API
 	QueueTimeout Duration `json:"queueTimeout"`
 	// Models are configured by hand (local dev, or anything outside the operator).
 	Models []Model `json:"models,omitempty"`
@@ -75,6 +76,9 @@ func Load(path string) (*Config, error) {
 func (c *Config) ApplyDefaults() {
 	if c.Listen == "" {
 		c.Listen = ":8080"
+	}
+	if c.AdminListen == "" {
+		c.AdminListen = ":9090"
 	}
 	if c.QueueTimeout.Duration == 0 {
 		c.QueueTimeout.Duration = 30 * time.Second

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,9 +14,13 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
+	osllmv1 "github.com/jayananden-m/os-llm/gen/osllm/v1"
+	"github.com/jayananden-m/os-llm/internal/admin"
 	"github.com/jayananden-m/os-llm/internal/config"
 	"github.com/jayananden-m/os-llm/internal/discovery"
 	"github.com/jayananden-m/os-llm/internal/gateway"
@@ -68,10 +73,23 @@ func main() {
 		// No WriteTimeout: a generation can legitimately take minutes.
 	}
 
-	errCh := make(chan error, 1)
+	lis, err := net.Listen("tcp", cfg.AdminListen)
+	if err != nil {
+		log.Error("admin listen", "err", err)
+		os.Exit(1)
+	}
+	grpcSrv := grpc.NewServer()
+	osllmv1.RegisterAdminServer(grpcSrv, admin.NewServer(gw))
+	reflection.Register(grpcSrv) // lets grpcurl discover the API
+
+	errCh := make(chan error, 2)
 	go func() {
 		log.Info("gateway listening", "addr", cfg.Listen)
 		errCh <- srv.ListenAndServe()
+	}()
+	go func() {
+		log.Info("admin gRPC listening", "addr", cfg.AdminListen)
+		errCh <- grpcSrv.Serve(lis)
 	}()
 
 	select {
@@ -87,6 +105,7 @@ func main() {
 	log.Info("shutting down, draining in-flight requests")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	grpcSrv.GracefulStop()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error("shutdown", "err", err)
 	}

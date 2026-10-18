@@ -21,6 +21,10 @@ type ModelDeploymentSpec struct {
 	// +optional
 	Args []string `json:"args,omitempty"`
 
+	// Env adds environment variables to the model server (e.g. vLLM CPU settings).
+	// +optional
+	Env []corev1.EnvVar `json:"env,omitempty"`
+
 	// Replicas is the number of model server pods.
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:default=1
@@ -103,10 +107,6 @@ type ModelDeploymentList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []ModelDeployment `json:"items"`
 }
-
-// func init() {
-// 	SchemeBuilder.Register(&ModelDeployment{}, &ModelDeploymentList{})
-// }
 
 func init() {
 	SchemeBuilder.Register(func(s *runtime.Scheme) error {

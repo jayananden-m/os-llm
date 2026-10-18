@@ -1,0 +1,34 @@
+# Real vLLM (CPU backend) behind the same model name. Apply once the image is
+# built and loaded into kind; it replaces the mock spec for md/qwen in place.
+apiVersion: serving.os-llm.dev/v1alpha1
+kind: ModelDeployment
+metadata:
+  name: qwen
+  namespace: os-llm
+spec:
+  model: qwen2.5-0.5b-instruct
+  image: vllm-cpu:dev
+  args:
+    - --model
+    - Qwen/Qwen2.5-0.5B-Instruct
+    - --served-model-name
+    - qwen2.5-0.5b-instruct
+    - --port
+    - "8000"
+    - --dtype
+    - bfloat16
+    - --max-model-len
+    - "2048"
+  env:
+    - name: VLLM_CPU_KVCACHE_SPACE   # GiB reserved for the KV cache
+      value: "1"
+  port: 8000
+  replicas: 1
+  maxInFlightPerReplica: 4
+  maxQueue: 16
+  resources:
+    requests:
+      cpu: "2"
+      memory: 3Gi
+    limits:
+      memory: 6Gi
