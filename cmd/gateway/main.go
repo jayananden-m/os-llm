@@ -1,93 +1,67 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
-	"io"
-	"log"
+	"context"
+	"errors"
+	"flag"
+	"log/slog"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/jayananden-m/os-llm/internal/config"
+	"github.com/jayananden-m/os-llm/internal/gateway"
 )
 
 func main() {
-	mux := http.NewServeMux() // Router: Empty Router
+	cfgPath := flag.String("config", "configs/gateway.local.json", "path to gateway config")
+	flag.Parse()
 
-	// (pattern, func)
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
+	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	mux.HandleFunc("GET /v1/models", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"object": "list",
-			"data": []map[string]any{
-				{
-					"id":       "qwen2.5-0.5b-instruct",
-					"object":   "model",
-					"owned_by": "os",
-				},
-			},
-		})
-	})
-
-	// backend, err := url.Parse("http://localhost:8000")
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// proxy := httputil.NewSingleHostReverseProxy(backend)
-	// mux.Handle("POST /v1/chat/completions", proxy)
-
-	backends := map[string]string{
-		"qwen2.5-0.5b-instruct": "http://localhost:8000",
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		log.Error("load config", "err", err)
+		os.Exit(1)
+	}
+	gw, err := gateway.New(cfg, log)
+	if err != nil {
+		log.Error("build gateway", "err", err)
+		os.Exit(1)
 	}
 
-	proxies := map[string]*httputil.ReverseProxy{}
-	for name, addr := range backends {
-		u, err := url.Parse(addr)
-		if err != nil {
-			log.Fatal(err)
-		}
-		proxies[name] = httputil.NewSingleHostReverseProxy(u)
+	srv := &http.Server{
+		Addr:              cfg.Listen,
+		Handler:           gw.Routes(),
+		ReadHeaderTimeout: 10 * time.Second,
+		// No WriteTimeout: a generation can legitimately take minutes.
 	}
-	
-	mux.HandleFunc("POST /v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_request_error", "could not read body")
-			return
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	errCh := make(chan error, 1)
+	go func() {
+		log.Info("gateway listening", "addr", cfg.Listen)
+		errCh <- srv.ListenAndServe()
+	}()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, http.ErrServerClosed) {
+			log.Error("server failed", "err", err)
+			os.Exit(1)
 		}
+		return
+	case <-ctx.Done():
+	}
 
-		var req struct {
-			Model string `json:"model"`
-		}
-		if err := json.Unmarshal(body, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_request_error", "invalid JSON")
-			return
-		}
-
-		proxy, ok := proxies[req.Model]
-		if !ok {
-			writeError(w, http.StatusNotFound, "model_not_found", "unknown model: "+ req.Model)
-			return
-		}
-
-		r.Body = io.NopCloser(bytes.NewReader(body))
-		proxy.ServeHTTP(w, r)
-	})
-
-
-
-	log.Println("gateway listening on port 8080")
-	log.Fatal(http.ListenAndServe(":8080", mux))
-}
-
-
-func writeError(w http.ResponseWriter, status int, errType, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]any{
-		"error": map[string]any{"message": msg, "type": errType},
-	})
+	log.Info("shutting down, draining in-flight requests")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Error("shutdown", "err", err)
+	}
 }

@@ -1,0 +1,12 @@
+{
+  "listen": ":8080",
+  "queueTimeout": "30s",
+  "models": [
+    {
+      "name": "qwen2.5-0.5b-instruct",
+      "replicas": ["http://localhost:8000", "http://localhost:8001"],
+      "maxInFlightPerReplica": 2,
+      "maxQueue": 4
+    }
+  ]
+}
