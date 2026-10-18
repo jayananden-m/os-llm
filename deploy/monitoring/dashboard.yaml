@@ -1,0 +1,281 @@
+# Grafana's sidecar loads any ConfigMap in this namespace labelled grafana_dashboard.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: os-llm-gateway-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  os-llm-gateway.json: |
+    {
+      "uid": "os-llm-gateway",
+      "title": "os-llm gateway",
+      "schemaVersion": 39,
+      "version": 1,
+      "time": {
+        "from": "now-15m",
+        "to": "now"
+      },
+      "refresh": "10s",
+      "tags": [
+        "os-llm"
+      ],
+      "panels": [
+        {
+          "id": 1,
+          "type": "timeseries",
+          "title": "Requests per second by status",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum by (code) (rate(osllm_gateway_requests_total[1m]))",
+              "legendFormat": "{{code}}"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "type": "timeseries",
+          "title": "Request latency",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "histogram_quantile(0.5, sum by (le) (rate(osllm_gateway_request_duration_seconds_bucket[1m])))",
+              "legendFormat": "p50"
+            },
+            {
+              "refId": "B",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(osllm_gateway_request_duration_seconds_bucket[1m])))",
+              "legendFormat": "p99"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "timeseries",
+          "title": "Queue depth",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum by (model) (osllm_gateway_queue_depth)",
+              "legendFormat": "{{model}}"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "type": "timeseries",
+          "title": "Queue wait",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "histogram_quantile(0.5, sum by (le) (rate(osllm_gateway_queue_wait_seconds_bucket[1m])))",
+              "legendFormat": "p50"
+            },
+            {
+              "refId": "B",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(osllm_gateway_queue_wait_seconds_bucket[1m])))",
+              "legendFormat": "p99"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "In-flight per replica vs capacity",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 16
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "osllm_gateway_replica_in_flight",
+              "legendFormat": "{{replica}}"
+            },
+            {
+              "refId": "B",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum(osllm_gateway_capacity_slots)",
+              "legendFormat": "capacity"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "Rejections per second",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 16
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum by (reason) (rate(osllm_gateway_rejected_total[1m]))",
+              "legendFormat": "{{reason}}"
+            }
+          ]
+        }
+      ]
+    }

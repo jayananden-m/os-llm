@@ -1,0 +1,13 @@
+# kube-prometheus-stack, trimmed for a laptop kind cluster.
+alertmanager:
+  enabled: false
+nodeExporter:
+  enabled: false
+grafana:
+  adminPassword: admin
+prometheus:
+  prometheusSpec:
+    retention: 2d
+    scrapeInterval: 15s
+    # Pick up every ServiceMonitor, not only ones labelled for this release.
+    serviceMonitorSelectorNilUsesHelmValues: false

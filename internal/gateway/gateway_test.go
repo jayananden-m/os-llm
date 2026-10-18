@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/jayananden-m/os-llm/internal/config"
 )
 
@@ -24,7 +26,7 @@ func newTestGateway(t *testing.T, backendURL string, maxPer, maxQueue int) http.
 			MaxQueue:              maxQueue,
 		}},
 	}
-	g, err := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	g, err := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), prometheus.NewRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,5 +109,30 @@ func TestModelsList(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
 	if !strings.Contains(rec.Body.String(), `"id":"small"`) {
 		t.Fatalf("models = %s", rec.Body.String())
+	}
+}
+
+func TestMetricsRecorded(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{}`)
+	}))
+	defer backend.Close()
+
+	h := newTestGateway(t, backend.URL, 1, 0)
+	post(h, `{"model":"small"}`)
+	post(h, `{"model":"gpt-9"}`)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	for _, want := range []string{
+		`osllm_gateway_requests_total{code="200",model="small"} 1`,
+		`osllm_gateway_requests_total{code="404",model="unknown"} 1`,
+		`osllm_gateway_capacity_slots{model="small"} 1`,
+		`osllm_gateway_queue_depth{model="small"} 0`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("metrics missing %q", want)
+		}
 	}
 }

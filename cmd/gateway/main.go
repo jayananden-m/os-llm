@@ -11,8 +11,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+
 	"github.com/jayananden-m/os-llm/internal/config"
 	"github.com/jayananden-m/os-llm/internal/gateway"
+	"github.com/jayananden-m/os-llm/internal/telemetry"
 )
 
 func main() {
@@ -26,7 +30,23 @@ func main() {
 		log.Error("load config", "err", err)
 		os.Exit(1)
 	}
-	gw, err := gateway.New(cfg, log)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	shutdownTracing, err := telemetry.SetupTracing(ctx, "os-llm-gateway")
+	if err != nil {
+		log.Error("setup tracing", "err", err)
+		os.Exit(1)
+	}
+
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+
+	gw, err := gateway.New(cfg, log, reg)
 	if err != nil {
 		log.Error("build gateway", "err", err)
 		os.Exit(1)
@@ -38,9 +58,6 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 		// No WriteTimeout: a generation can legitimately take minutes.
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -63,5 +80,8 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error("shutdown", "err", err)
+	}
+	if err := shutdownTracing(shutdownCtx); err != nil {
+		log.Error("flush traces", "err", err)
 	}
 }

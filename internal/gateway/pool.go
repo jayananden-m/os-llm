@@ -21,11 +21,11 @@ type Replica struct {
 // replica has a free slot, queues it (FIFO, bounded) when none do, and
 // rejects it when the queue is full.
 type Pool struct {
-	mu sync.Mutex
-	replicas []*Replica
+	mu            sync.Mutex
+	replicas      []*Replica
 	maxPerReplica int
-	maxQueue int
-	waiters []chan *Replica
+	maxQueue      int
+	waiters       []chan *Replica
 }
 
 func newPool(replicas []*Replica, maxPerReplica, maxQueue int) *Pool {
@@ -86,6 +86,23 @@ func (p *Pool) Stats() (inFlight, queued int) {
 		inFlight += r.inFlight
 	}
 	return inFlight, len(p.waiters)
+}
+
+// ReplicaStat is a point-in-time view of one replica, used for metrics.
+type ReplicaStat struct {
+	Addr     string
+	InFlight int
+}
+
+// Snapshot returns per-replica load, queue length and total slots.
+func (p *Pool) Snapshot() (replicas []ReplicaStat, queued, capacity int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	replicas = make([]ReplicaStat, 0, len(p.replicas))
+	for _, r := range p.replicas {
+		replicas = append(replicas, ReplicaStat{Addr: r.Addr, InFlight: r.inFlight})
+	}
+	return replicas, len(p.waiters), len(p.replicas) * p.maxPerReplica
 }
 
 // pickLocked returns the least-busy replica with a free slot, or nil.

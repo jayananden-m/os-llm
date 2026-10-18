@@ -27,16 +27,16 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 
 // Model is one served model and the replicas behind it.
 type Model struct {
-	Name string `json:"name"`
-	Replicas []string `json:"replicas"`
-	MaxInFlightPerReplica int `json:"maxInFlightPerReplica"`
-	MaxQueue int `json:"maxQueue"`
+	Name                  string   `json:"name"`
+	Replicas              []string `json:"replicas"`
+	MaxInFlightPerReplica int      `json:"maxInFlightPerReplica"`
+	MaxQueue              int      `json:"maxQueue"`
 }
 
 type Config struct {
-	Listen string `json:"listen"`
+	Listen       string   `json:"listen"`
 	QueueTimeout Duration `json:"queueTimeout"`
-	Models []Model `json:"models"`
+	Models       []Model  `json:"models"`
 }
 
 func Load(path string) (*Config, error) {

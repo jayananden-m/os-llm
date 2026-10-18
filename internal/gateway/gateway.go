@@ -13,18 +13,30 @@ import (
 	"sort"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/jayananden-m/os-llm/internal/config"
 )
 
 const maxBodyBytes = 1 << 20 // 1 MiB
 
+var tracer = otel.Tracer("github.com/jayananden-m/os-llm/gateway")
+
 type Gateway struct {
 	pools        map[string]*Pool
 	queueTimeout time.Duration
 	log          *slog.Logger
+	reg          *prometheus.Registry
+	metrics      *metrics
 }
 
-func New(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
+func New(cfg *config.Config, log *slog.Logger, reg *prometheus.Registry) (*Gateway, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -32,7 +44,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
-	g := &Gateway{pools: map[string]*Pool{}, queueTimeout: timeout, log: log}
+	g := &Gateway{pools: map[string]*Pool{}, queueTimeout: timeout, log: log, reg: reg}
 	for _, m := range cfg.Models {
 		reps := make([]*Replica, 0, len(m.Replicas))
 		for _, addr := range m.Replicas {
@@ -44,11 +56,14 @@ func New(cfg *config.Config, log *slog.Logger) (*Gateway, error) {
 		}
 		g.pools[m.Name] = newPool(reps, m.MaxInFlightPerReplica, m.MaxQueue)
 	}
+	g.metrics = newMetrics(reg, g)
 	return g, nil
 }
 
 func newProxy(target *url.URL, log *slog.Logger) *httputil.ReverseProxy {
 	p := httputil.NewSingleHostReverseProxy(target)
+	// Client span per replica call, and traceparent injected so vLLM can join the trace.
+	p.Transport = otelhttp.NewTransport(http.DefaultTransport)
 	p.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		if errors.Is(err, context.Canceled) {
 			return // client went away
@@ -64,13 +79,29 @@ func (g *Gateway) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.Handle("GET /metrics", promhttp.HandlerFor(g.reg, promhttp.HandlerOpts{}))
 	mux.HandleFunc("GET /v1/models", g.handleModels)
 	mux.HandleFunc("POST /v1/chat/completions", g.handleInference)
 	mux.HandleFunc("POST /v1/completions", g.handleInference)
-	return mux
+
+	// Server span per request. Probes and scrapes are skipped to keep traces clean.
+	return otelhttp.NewHandler(mux, "gateway",
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+			return r.Method + " " + r.URL.Path
+		}),
+		otelhttp.WithFilter(func(r *http.Request) bool {
+			return r.URL.Path != "/healthz" && r.URL.Path != "/metrics"
+		}),
+	)
 }
 
 func (g *Gateway) handleInference(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	rec := &statusRecorder{ResponseWriter: w}
+	w = rec
+	model := "unknown" // label stays bounded until the model is known to exist
+	defer func() { g.metrics.observe(model, rec.status, time.Since(start)) }()
+
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", "could not read request body")
@@ -92,29 +123,51 @@ func (g *Gateway) handleInference(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "model_not_found", "unknown model: "+req.Model)
 		return
 	}
+	model = req.Model
+	trace.SpanFromContext(r.Context()).SetAttributes(attribute.String("llm.model", model))
 
-	// The timeout covers waiting in the queue only, not generation.
-	ctx, cancel := context.WithTimeout(r.Context(), g.queueTimeout)
-	rep, err := pool.Acquire(ctx)
-	cancel()
-	switch {
-	case errors.Is(err, ErrQueueFull):
-		w.Header().Set("Retry-After", "1")
-		writeError(w, http.StatusTooManyRequests, "queue_full", "all replicas busy and queue full, retry shortly")
+	rep, ok := g.admit(w, r, pool, model)
+	if !ok {
 		return
-	case errors.Is(err, context.DeadlineExceeded):
-		w.Header().Set("Retry-After", "1")
-		writeError(w, http.StatusServiceUnavailable, "queue_timeout", "timed out waiting for a free replica")
-		return
-	case err != nil:
-		return // client disconnected while queued
 	}
 	defer pool.Release(rep)
 
-	g.log.Info("routed", "model", req.Model, "replica", rep.Addr)
+	g.log.Info("routed", "model", model, "replica", rep.Addr)
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	r.ContentLength = int64(len(body))
 	rep.proxy.ServeHTTP(w, r)
+}
+
+// admit waits for a replica slot inside its own span, and writes the error
+// response itself when the request is rejected.
+func (g *Gateway) admit(w http.ResponseWriter, r *http.Request, pool *Pool, model string) (*Replica, bool) {
+	ctx, span := tracer.Start(r.Context(), "queue.wait")
+	defer span.End()
+
+	ctx, cancel := context.WithTimeout(ctx, g.queueTimeout)
+	defer cancel()
+
+	waitStart := time.Now()
+	rep, err := pool.Acquire(ctx)
+	switch {
+	case err == nil:
+		g.metrics.queueWait.WithLabelValues(model).Observe(time.Since(waitStart).Seconds())
+		span.SetAttributes(attribute.String("llm.replica", rep.Addr))
+		return rep, true
+	case errors.Is(err, ErrQueueFull):
+		g.metrics.rejected.WithLabelValues(model, "queue_full").Inc()
+		span.SetStatus(codes.Error, "queue full")
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusTooManyRequests, "queue_full", "all replicas busy and queue full, retry shortly")
+	case errors.Is(err, context.DeadlineExceeded):
+		g.metrics.rejected.WithLabelValues(model, "queue_timeout").Inc()
+		span.SetStatus(codes.Error, "queue timeout")
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusServiceUnavailable, "queue_timeout", "timed out waiting for a free replica")
+	default:
+		span.SetStatus(codes.Error, "client cancelled") // client disconnected while queued
+	}
+	return nil, false
 }
 
 func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {

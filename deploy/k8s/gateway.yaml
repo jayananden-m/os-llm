@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-config
+  namespace: os-llm
+data:
+  gateway.json: |
+    {
+      "listen": ":8080",
+      "queueTimeout": "30s",
+      "models": [
+        {
+          "name": "qwen2.5-0.5b-instruct",
+          "replicas": [
+            "http://mock-qwen-0.mock-qwen.os-llm.svc.cluster.local:8000",
+            "http://mock-qwen-1.mock-qwen.os-llm.svc.cluster.local:8000"
+          ],
+          "maxInFlightPerReplica": 2,
+          "maxQueue": 4
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: os-llm
+  labels:
+    app.kubernetes.io/name: gateway
+    app.kubernetes.io/part-of: os-llm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gateway
+        app.kubernetes.io/part-of: os-llm
+      annotations:
+        # Bump to roll the pod after editing the ConfigMap.
+        os-llm/config-rev: "1"
+    spec:
+      terminationGracePeriodSeconds: 45 # longer than the gateway's 30s drain
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: gateway
+          image: os-llm/gateway:dev
+          imagePullPolicy: IfNotPresent
+          args: ["-config", "/etc/os-llm/gateway.json"]
+          env:
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector.observability.svc.cluster.local:4318
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            - name: config
+              mountPath: /etc/os-llm
+              readOnly: true
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: config
+          configMap:
+            name: gateway-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: os-llm
+  labels:
+    app.kubernetes.io/name: gateway
+    app.kubernetes.io/part-of: os-llm
+spec:
+  selector:
+    app.kubernetes.io/name: gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
