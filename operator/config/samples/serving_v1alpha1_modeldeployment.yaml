@@ -1,0 +1,14 @@
+# Replaces the hand-written mock-qwen Deployment and Service.
+apiVersion: serving.os-llm.dev/v1alpha1
+kind: ModelDeployment
+metadata:
+  name: qwen
+  namespace: os-llm
+spec:
+  model: qwen2.5-0.5b-instruct
+  image: os-llm/mockllm:dev
+  args: ["--port", "8000", "--delay", "3s"]
+  port: 8000
+  replicas: 2
+  maxInFlightPerReplica: 2
+  maxQueue: 4
