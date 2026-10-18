@@ -76,7 +76,7 @@ func (c *poolCollector) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (c *poolCollector) Collect(ch chan<- prometheus.Metric) {
-	for model, p := range c.g.pools {
+	for model, p := range c.g.poolsSnapshot() {
 		reps, queued, capacity := p.Snapshot()
 		ch <- prometheus.MustNewConstMetric(c.queueDepth, prometheus.GaugeValue, float64(queued), model)
 		ch <- prometheus.MustNewConstMetric(c.capacity, prometheus.GaugeValue, float64(capacity), model)

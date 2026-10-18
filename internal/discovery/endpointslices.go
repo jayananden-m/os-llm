@@ -28,18 +28,15 @@ type Target struct {
 	OnChange  func(addrs []string)
 }
 
-// NewClient uses the in-cluster service account, falling back to the local kubeconfig.
-func NewClient() (kubernetes.Interface, error) {
+// RestConfig uses the in-cluster service account, falling back to the local kubeconfig.
+func RestConfig() (*rest.Config, error) {
 	cfg, err := rest.InClusterConfig()
-	if err != nil {
-		cfg, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-			clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{},
-		).ClientConfig()
-		if err != nil {
-			return nil, err
-		}
+	if err == nil {
+		return cfg, nil
 	}
-	return kubernetes.NewForConfig(cfg)
+	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{},
+	).ClientConfig()
 }
 
 // Watch starts an informer on the Service's EndpointSlices, calls OnChange once

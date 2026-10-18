@@ -1,10 +1,11 @@
 CLUSTER ?= os-llm
 TAG     ?= dev
 
-.PHONY: test images kind-up kind-down load monitoring observability deploy up forward grafana jaeger
+.PHONY: test images kind-up kind-down load monitoring observability operator deploy up forward grafana jaeger
 
 test:
 	go vet ./... && go test -race ./...
+	cd operator && $(MAKE) test
 
 images:
 	docker build --build-arg APP=gateway -t os-llm/gateway:$(TAG) .
@@ -30,14 +31,21 @@ observability:
 	kubectl apply -f deploy/k8s/namespace.yaml
 	kubectl apply -f deploy/observability/
 
+# Builds the operator image, loads it into kind, installs the CRD and runs the controller in-cluster.
+operator:
+	cd operator && $(MAKE) docker-build IMG=os-llm/operator:$(TAG)
+	kind load docker-image os-llm/operator:$(TAG) --name $(CLUSTER)
+	cd operator && $(MAKE) deploy IMG=os-llm/operator:$(TAG)
+	kubectl -n operator-system rollout status deploy/operator-controller-manager --timeout=2m
+
 deploy: load
 	kubectl apply -f deploy/k8s/namespace.yaml
 	kubectl apply -f deploy/k8s/
 	kubectl apply -f deploy/monitoring/servicemonitor.yaml
-	kubectl -n os-llm rollout status deploy/mock-qwen --timeout=2m
+	kubectl apply -f deploy/models/
 	kubectl -n os-llm rollout status deploy/gateway --timeout=2m
 
-up: kind-up monitoring observability deploy
+up: kind-up monitoring observability operator deploy
 
 forward:
 	kubectl -n os-llm port-forward svc/gateway 8080:8080

@@ -136,3 +136,37 @@ func TestMetricsRecorded(t *testing.T) {
 		}
 	}
 }
+
+func TestUpsertAndRemoveModel(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{}`)
+	}))
+	defer backend.Close()
+
+	cfg := &config.Config{
+		QueueTimeout:     config.Duration{Duration: time.Second},
+		ModelDeployments: &config.ModelDeploymentsSource{Namespace: "os-llm"},
+	}
+	g, err := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), prometheus.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := g.Routes()
+
+	if rec := post(h, `{"model":"llama"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("before upsert: got %d, want 404", rec.Code)
+	}
+
+	pool := g.UpsertModel("llama", 1, 0)
+	if _, _, err := pool.SetReplicas([]string{backend.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := post(h, `{"model":"llama"}`); rec.Code != http.StatusOK {
+		t.Fatalf("after upsert: got %d, want 200", rec.Code)
+	}
+
+	g.RemoveModel("llama")
+	if rec := post(h, `{"model":"llama"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("after remove: got %d, want 404", rec.Code)
+	}
+}

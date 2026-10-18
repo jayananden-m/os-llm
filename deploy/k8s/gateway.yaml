@@ -8,14 +8,7 @@ data:
     {
       "listen": ":8080",
       "queueTimeout": "30s",
-      "models": [
-        {
-          "name": "qwen2.5-0.5b-instruct",
-          "discovery": {"namespace": "os-llm", "service": "mock-qwen", "port": "http"},
-          "maxInFlightPerReplica": 2,
-          "maxQueue": 4
-        }
-      ]
+      "modelDeployments": {"namespace": "os-llm"}
     }
 ---
 apiVersion: apps/v1
@@ -38,7 +31,7 @@ spec:
         app.kubernetes.io/part-of: os-llm
       annotations:
         # Bump to roll the pod after editing the ConfigMap.
-        os-llm/config-rev: "2"
+        os-llm/config-rev: "3"
     spec:
       serviceAccountName: gateway
       terminationGracePeriodSeconds: 45 # longer than the gateway's 30s drain

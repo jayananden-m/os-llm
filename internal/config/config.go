@@ -42,10 +42,18 @@ type Model struct {
 	MaxQueue              int        `json:"maxQueue"`
 }
 
+// ModelDeploymentsSource makes the gateway serve every ModelDeployment in a namespace.
+type ModelDeploymentsSource struct {
+	Namespace string `json:"namespace"`
+}
+
 type Config struct {
 	Listen       string   `json:"listen"`
 	QueueTimeout Duration `json:"queueTimeout"`
-	Models       []Model  `json:"models"`
+	// Models are configured by hand (local dev, or anything outside the operator).
+	Models []Model `json:"models,omitempty"`
+	// ModelDeployments, if set, adds and removes models as ModelDeployments change.
+	ModelDeployments *ModelDeploymentsSource `json:"modelDeployments,omitempty"`
 }
 
 func Load(path string) (*Config, error) {
@@ -83,8 +91,11 @@ func (c *Config) ApplyDefaults() {
 }
 
 func (c *Config) Validate() error {
-	if len(c.Models) == 0 {
-		return errors.New("config: at least one model is required")
+	if len(c.Models) == 0 && c.ModelDeployments == nil {
+		return errors.New("config: set models, modelDeployments, or both")
+	}
+	if c.ModelDeployments != nil && c.ModelDeployments.Namespace == "" {
+		return errors.New("config: modelDeployments needs a namespace")
 	}
 	seen := map[string]bool{}
 	for _, m := range c.Models {

@@ -13,11 +13,13 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/jayananden-m/os-llm/internal/config"
 	"github.com/jayananden-m/os-llm/internal/discovery"
 	"github.com/jayananden-m/os-llm/internal/gateway"
+	"github.com/jayananden-m/os-llm/internal/registry"
 	"github.com/jayananden-m/os-llm/internal/telemetry"
 )
 
@@ -93,19 +95,31 @@ func main() {
 	}
 }
 
-// startDiscovery watches EndpointSlices for every model configured with discovery.
+// startDiscovery wires the gateway to Kubernetes: EndpointSlice watches for
+// models configured with discovery, and a ModelDeployment watch if enabled.
 func startDiscovery(ctx context.Context, cfg *config.Config, gw *gateway.Gateway, log *slog.Logger) error {
-	var client kubernetes.Interface
+	needsKube := cfg.ModelDeployments != nil
+	for _, m := range cfg.Models {
+		if m.Discovery != nil {
+			needsKube = true
+		}
+	}
+	if !needsKube {
+		return nil
+	}
+
+	restCfg, err := discovery.RestConfig()
+	if err != nil {
+		return err
+	}
+	kube, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		return err
+	}
+
 	for _, m := range cfg.Models {
 		if m.Discovery == nil {
 			continue
-		}
-		if client == nil {
-			c, err := discovery.NewClient()
-			if err != nil {
-				return err
-			}
-			client = c
 		}
 		pool := gw.Pool(m.Name)
 		target := discovery.Target{
@@ -122,10 +136,22 @@ func startDiscovery(ctx context.Context, cfg *config.Config, gw *gateway.Gateway
 				}
 			},
 		}
-		if err := discovery.Watch(ctx, client, target, log); err != nil {
+		if err := discovery.Watch(ctx, kube, target, log); err != nil {
 			return err
 		}
 		log.Info("watching replicas", "model", m.Name, "service", m.Discovery.Namespace+"/"+m.Discovery.Service)
+	}
+
+	if cfg.ModelDeployments != nil {
+		dyn, err := dynamic.NewForConfig(restCfg)
+		if err != nil {
+			return err
+		}
+		reg := registry.New(ctx, gw, kube, cfg.ModelDeployments.Namespace, log)
+		if err := reg.Start(dyn); err != nil {
+			return err
+		}
+		log.Info("watching modeldeployments", "namespace", cfg.ModelDeployments.Namespace)
 	}
 	return nil
 }

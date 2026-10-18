@@ -11,6 +11,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -29,7 +30,9 @@ const maxBodyBytes = 1 << 20 // 1 MiB
 var tracer = otel.Tracer("github.com/jayananden-m/os-llm/gateway")
 
 type Gateway struct {
-	pools        map[string]*Pool
+	mu           sync.RWMutex
+	pools        map[string]*Pool // model name -> pool; changes as models come and go
+	makeReplica  func(addr string) (*Replica, error)
 	queueTimeout time.Duration
 	log          *slog.Logger
 	reg          *prometheus.Registry
@@ -45,7 +48,7 @@ func New(cfg *config.Config, log *slog.Logger, reg *prometheus.Registry) (*Gatew
 		timeout = 30 * time.Second
 	}
 	g := &Gateway{pools: map[string]*Pool{}, queueTimeout: timeout, log: log, reg: reg}
-	makeReplica := func(addr string) (*Replica, error) {
+	g.makeReplica = func(addr string) (*Replica, error) {
 		u, err := url.Parse(addr)
 		if err != nil {
 			return nil, err
@@ -53,7 +56,7 @@ func New(cfg *config.Config, log *slog.Logger, reg *prometheus.Registry) (*Gatew
 		return &Replica{Addr: addr, proxy: newProxy(u, log)}, nil
 	}
 	for _, m := range cfg.Models {
-		pool := newPool(m.MaxInFlightPerReplica, m.MaxQueue, makeReplica)
+		pool := newPool(m.MaxInFlightPerReplica, m.MaxQueue, g.makeReplica)
 		// Static replicas load now. Discovered ones arrive later via SetReplicas.
 		if _, _, err := pool.SetReplicas(m.Replicas); err != nil {
 			return nil, err
@@ -65,7 +68,61 @@ func New(cfg *config.Config, log *slog.Logger, reg *prometheus.Registry) (*Gatew
 }
 
 // Pool returns the replica pool for a model, or nil if it is not served.
-func (g *Gateway) Pool(model string) *Pool { return g.pools[model] }
+func (g *Gateway) Pool(model string) *Pool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.pools[model]
+}
+
+// UpsertModel starts serving a model, or updates its limits if already served.
+// Replicas are added separately through the returned pool's SetReplicas.
+func (g *Gateway) UpsertModel(model string, maxPerReplica, maxQueue int) *Pool {
+	if maxPerReplica < 1 {
+		maxPerReplica = 1
+	}
+	if maxQueue < 0 {
+		maxQueue = 0
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if p, ok := g.pools[model]; ok {
+		p.SetLimits(maxPerReplica, maxQueue)
+		return p
+	}
+	p := newPool(maxPerReplica, maxQueue, g.makeReplica)
+	g.pools[model] = p
+	return p
+}
+
+// RemoveModel stops serving a model. Requests already running finish normally.
+func (g *Gateway) RemoveModel(model string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.pools, model)
+}
+
+// Models returns the served model names, sorted.
+func (g *Gateway) Models() []string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	names := make([]string, 0, len(g.pools))
+	for n := range g.pools {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// poolsSnapshot copies the model -> pool map so callers can iterate without the lock.
+func (g *Gateway) poolsSnapshot() map[string]*Pool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	out := make(map[string]*Pool, len(g.pools))
+	for k, v := range g.pools {
+		out[k] = v
+	}
+	return out
+}
 
 func newProxy(target *url.URL, log *slog.Logger) *httputil.ReverseProxy {
 	p := httputil.NewSingleHostReverseProxy(target)
@@ -125,8 +182,8 @@ func (g *Gateway) handleInference(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", "model is required")
 		return
 	}
-	pool, ok := g.pools[req.Model]
-	if !ok {
+	pool := g.Pool(req.Model)
+	if pool == nil {
 		writeError(w, http.StatusNotFound, "model_not_found", "unknown model: "+req.Model)
 		return
 	}
@@ -178,12 +235,7 @@ func (g *Gateway) admit(w http.ResponseWriter, r *http.Request, pool *Pool, mode
 }
 
 func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
-	names := make([]string, 0, len(g.pools))
-	for n := range g.pools {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-
+	names := g.Models()
 	data := make([]map[string]any, 0, len(names))
 	for _, n := range names {
 		data = append(data, map[string]any{"id": n, "object": "model", "owned_by": "os-llm"})

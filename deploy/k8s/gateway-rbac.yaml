@@ -1,4 +1,4 @@
-# The gateway may only read EndpointSlices, and only in its own namespace.
+# The gateway may only read EndpointSlices and ModelDeployments, and only in its own namespace.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -13,6 +13,9 @@ metadata:
 rules:
   - apiGroups: ["discovery.k8s.io"]
     resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["serving.os-llm.dev"]
+    resources: ["modeldeployments"]
     verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

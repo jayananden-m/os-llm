@@ -72,6 +72,15 @@ func (p *Pool) SetReplicas(addrs []string) (added, removed int, err error) {
 	return added, removed, err
 }
 
+// SetLimits changes per-replica capacity and queue size at runtime.
+func (p *Pool) SetLimits(maxPerReplica, maxQueue int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.maxPerReplica = maxPerReplica
+	p.maxQueue = maxQueue
+	p.dispatchLocked() // more capacity may free queued requests
+}
+
 // Acquire returns a replica with a reserved slot, waiting in the queue if needed.
 // The caller must call Release when the request finishes.
 func (p *Pool) Acquire(ctx context.Context) (*Replica, error) {
