@@ -19,17 +19,57 @@ type Replica struct {
 
 // Pool holds the replicas for one model. It admits a request only when a
 // replica has a free slot, queues it (FIFO, bounded) when none do, and
-// rejects it when the queue is full.
+// rejects it when the queue is full. The replica set can change at runtime.
 type Pool struct {
 	mu            sync.Mutex
 	replicas      []*Replica
 	maxPerReplica int
 	maxQueue      int
 	waiters       []chan *Replica
+	makeReplica   func(addr string) (*Replica, error)
 }
 
-func newPool(replicas []*Replica, maxPerReplica, maxQueue int) *Pool {
-	return &Pool{replicas: replicas, maxPerReplica: maxPerReplica, maxQueue: maxQueue}
+func newPool(maxPerReplica, maxQueue int, makeReplica func(addr string) (*Replica, error)) *Pool {
+	return &Pool{maxPerReplica: maxPerReplica, maxQueue: maxQueue, makeReplica: makeReplica}
+}
+
+// SetReplicas replaces the replica set. Replicas that stay keep their in-flight
+// count; removed ones finish their current requests but get no new ones.
+// New capacity is handed to queued requests immediately.
+func (p *Pool) SetReplicas(addrs []string) (added, removed int, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	want := make(map[string]bool, len(addrs))
+	for _, a := range addrs {
+		want[a] = true
+	}
+	next := make([]*Replica, 0, len(addrs))
+	have := map[string]bool{}
+	for _, r := range p.replicas {
+		if want[r.Addr] {
+			next = append(next, r)
+			have[r.Addr] = true
+		} else {
+			removed++
+		}
+	}
+	for _, a := range addrs {
+		if have[a] {
+			continue
+		}
+		r, mkErr := p.makeReplica(a)
+		if mkErr != nil {
+			err = errors.Join(err, mkErr)
+			continue
+		}
+		next = append(next, r)
+		have[a] = true
+		added++
+	}
+	p.replicas = next
+	p.dispatchLocked()
+	return added, removed, err
 }
 
 // Acquire returns a replica with a reserved slot, waiting in the queue if needed.
@@ -57,28 +97,36 @@ func (p *Pool) Acquire(ctx context.Context) (*Replica, error) {
 		removed := p.removeWaiterLocked(ch)
 		p.mu.Unlock()
 		if !removed {
-			// Release handed us a slot at the same moment we gave up. Pass it on.
+			// A slot was handed to us at the same moment we gave up. Pass it on.
 			p.Release(<-ch)
 		}
 		return nil, ctx.Err()
 	}
 }
 
-// Release frees a slot. If requests are waiting, the slot goes straight to the
-// oldest one, so the replica's in-flight count stays the same.
+// Release frees a slot and hands any free capacity to the oldest waiters.
 func (p *Pool) Release(r *Replica) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if len(p.waiters) > 0 {
+	r.inFlight--
+	p.dispatchLocked()
+}
+
+// dispatchLocked moves queued requests onto free slots, oldest first.
+func (p *Pool) dispatchLocked() {
+	for len(p.waiters) > 0 {
+		r := p.pickLocked()
+		if r == nil {
+			return
+		}
+		r.inFlight++
 		ch := p.waiters[0]
 		p.waiters = p.waiters[1:]
 		ch <- r // buffered, never blocks
-		return
 	}
-	r.inFlight--
 }
 
-// Stats reports total in-flight requests and queue length.
+// Stats reports in-flight requests on current replicas and queue length.
 func (p *Pool) Stats() (inFlight, queued int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

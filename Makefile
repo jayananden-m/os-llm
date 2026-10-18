@@ -34,7 +34,7 @@ deploy: load
 	kubectl apply -f deploy/k8s/namespace.yaml
 	kubectl apply -f deploy/k8s/
 	kubectl apply -f deploy/monitoring/servicemonitor.yaml
-	kubectl -n os-llm rollout status statefulset/mock-qwen --timeout=2m
+	kubectl -n os-llm rollout status deploy/mock-qwen --timeout=2m
 	kubectl -n os-llm rollout status deploy/gateway --timeout=2m
 
 up: kind-up monitoring observability deploy

@@ -25,12 +25,21 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// Model is one served model and the replicas behind it.
+// Discovery finds a model's replicas from a Kubernetes Service's EndpointSlices.
+type Discovery struct {
+	Namespace string `json:"namespace"`
+	Service   string `json:"service"`
+	Port      string `json:"port"` // port name on the Service; empty takes the first port
+}
+
+// Model is one served model and the replicas behind it. Set exactly one of
+// Replicas (static addresses, for local dev) or Discovery (in-cluster).
 type Model struct {
-	Name                  string   `json:"name"`
-	Replicas              []string `json:"replicas"`
-	MaxInFlightPerReplica int      `json:"maxInFlightPerReplica"`
-	MaxQueue              int      `json:"maxQueue"`
+	Name                  string     `json:"name"`
+	Replicas              []string   `json:"replicas,omitempty"`
+	Discovery             *Discovery `json:"discovery,omitempty"`
+	MaxInFlightPerReplica int        `json:"maxInFlightPerReplica"`
+	MaxQueue              int        `json:"maxQueue"`
 }
 
 type Config struct {
@@ -86,8 +95,13 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: duplicate model %q", m.Name)
 		}
 		seen[m.Name] = true
-		if len(m.Replicas) == 0 {
-			return fmt.Errorf("config: model %q has no replicas", m.Name)
+		switch {
+		case len(m.Replicas) > 0 && m.Discovery != nil:
+			return fmt.Errorf("config: model %q sets both replicas and discovery", m.Name)
+		case len(m.Replicas) == 0 && m.Discovery == nil:
+			return fmt.Errorf("config: model %q needs replicas or discovery", m.Name)
+		case m.Discovery != nil && (m.Discovery.Namespace == "" || m.Discovery.Service == ""):
+			return fmt.Errorf("config: model %q discovery needs namespace and service", m.Name)
 		}
 		if m.MaxInFlightPerReplica < 1 {
 			return fmt.Errorf("config: model %q needs maxInFlightPerReplica >= 1", m.Name)

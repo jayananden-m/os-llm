@@ -1,6 +1,5 @@
-# Stand-in for vLLM. A StatefulSet gives each replica a stable DNS name
-# (mock-qwen-0.mock-qwen..., mock-qwen-1.mock-qwen...), which the static
-# gateway config needs until Part 4 discovers replicas automatically.
+# Stand-in for vLLM. A plain Deployment now: the gateway finds each pod through
+# the Service's EndpointSlices, so pods no longer need stable names.
 apiVersion: v1
 kind: Service
 metadata:
@@ -10,7 +9,6 @@ metadata:
     app.kubernetes.io/name: mock-qwen
     app.kubernetes.io/part-of: os-llm
 spec:
-  clusterIP: None
   selector:
     app.kubernetes.io/name: mock-qwen
   ports:
@@ -19,7 +17,7 @@ spec:
       targetPort: http
 ---
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: mock-qwen
   namespace: os-llm
@@ -27,9 +25,7 @@ metadata:
     app.kubernetes.io/name: mock-qwen
     app.kubernetes.io/part-of: os-llm
 spec:
-  serviceName: mock-qwen
   replicas: 2
-  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app.kubernetes.io/name: mock-qwen

@@ -45,20 +45,27 @@ func New(cfg *config.Config, log *slog.Logger, reg *prometheus.Registry) (*Gatew
 		timeout = 30 * time.Second
 	}
 	g := &Gateway{pools: map[string]*Pool{}, queueTimeout: timeout, log: log, reg: reg}
-	for _, m := range cfg.Models {
-		reps := make([]*Replica, 0, len(m.Replicas))
-		for _, addr := range m.Replicas {
-			u, err := url.Parse(addr)
-			if err != nil {
-				return nil, err
-			}
-			reps = append(reps, &Replica{Addr: addr, proxy: newProxy(u, log)})
+	makeReplica := func(addr string) (*Replica, error) {
+		u, err := url.Parse(addr)
+		if err != nil {
+			return nil, err
 		}
-		g.pools[m.Name] = newPool(reps, m.MaxInFlightPerReplica, m.MaxQueue)
+		return &Replica{Addr: addr, proxy: newProxy(u, log)}, nil
+	}
+	for _, m := range cfg.Models {
+		pool := newPool(m.MaxInFlightPerReplica, m.MaxQueue, makeReplica)
+		// Static replicas load now. Discovered ones arrive later via SetReplicas.
+		if _, _, err := pool.SetReplicas(m.Replicas); err != nil {
+			return nil, err
+		}
+		g.pools[m.Name] = pool
 	}
 	g.metrics = newMetrics(reg, g)
 	return g, nil
 }
+
+// Pool returns the replica pool for a model, or nil if it is not served.
+func (g *Gateway) Pool(model string) *Pool { return g.pools[model] }
 
 func newProxy(target *url.URL, log *slog.Logger) *httputil.ReverseProxy {
 	p := httputil.NewSingleHostReverseProxy(target)
